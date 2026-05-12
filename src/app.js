@@ -11,10 +11,12 @@ app.get('/health', (req, res) => {
     res.send('API is running');
 });
 
-const uploadRoutes = require('./routes/upload.routes');
-const downloadRoutes = require('./routes/download.routes');
+const uploadFtpRoutes = require('./routes/upload-ftp.routes');
+const downloadFtpRoutes = require('./routes/download-ftp.routes');
+const viewFtpRoutes = require('./routes/view-ftp.routes');
 
-app.use('/api/uploadftp', uploadRoutes);
-app.use('/api/downloadftp', downloadRoutes);
+app.use('/api/uploadftp', uploadFtpRoutes);
+app.use('/api/downloadftp', downloadFtpRoutes);
+app.use('/api/viewftp', viewFtpRoutes);
 
 module.exports = app;
