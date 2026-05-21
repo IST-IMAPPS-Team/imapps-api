@@ -14,9 +14,13 @@ app.get('/health', (req, res) => {
 const uploadFtpRoutes = require('./routes/upload-ftp.routes');
 const downloadFtpRoutes = require('./routes/download-ftp.routes');
 const viewFtpRoutes = require('./routes/view-ftp.routes');
+const copyFtpRoutes = require('./routes/copy-ftp.routes');
+const deleteFtpRoutes = require('./routes/delete-ftp.routes');
 
 app.use('/api/uploadftp', uploadFtpRoutes);
 app.use('/api/downloadftp', downloadFtpRoutes);
 app.use('/api/viewftp', viewFtpRoutes);
+app.use('/api/copyftp', copyFtpRoutes);
+app.use('/api/deleteftp', deleteFtpRoutes);
 
 module.exports = app;
