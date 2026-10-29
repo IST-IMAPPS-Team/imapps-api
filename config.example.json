@@ -1,0 +1,45 @@
+{
+  "_readme": "Copy this file to config.json in this folder and fill in the real values on the server. config.json is git-ignored: never commit it. Keys starting with _ are notes and are ignored. Optional settings show their default.",
+
+  "cors": {
+    "origins": ["<web app address, for example http://server:4200>"]
+  },
+
+  "jwt": {
+    "secret": "<long random text, at least 32 characters>",
+    "hours": 8,
+    "rememberMeDays": 30
+  },
+
+  "auth": {
+    "procedure": "NGP_GetAuthUsers"
+  },
+
+  "limits": {
+    "saveMegabytes": 20,
+    "tableRows": 1000,
+    "saveSteps": 20,
+    "saveRowsPerTable": 50000,
+    "ftpUploadMegabytes": 100
+  },
+
+  "profiles": {
+    "<profile name, for example dyp>": {
+      "server": "<SQL Server host name or address>",
+      "port": 1433,
+      "database": "<database name>",
+      "user": "<SQL login>",
+      "password": "<SQL login password>",
+      "encrypt": false,
+      "trustServerCertificate": true,
+      "poolMax": 20,
+      "dataTimeoutSeconds": 300,
+      "multiTimeoutSeconds": 600
+    }
+  },
+
+  "ftp": {
+    "allowedHosts": [],
+    "timeoutSeconds": 30
+  }
+}

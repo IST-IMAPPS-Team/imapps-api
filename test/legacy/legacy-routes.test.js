@@ -1,6 +1,10 @@
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 
+// Load the app with the new API switched on (a fake config), so these tests also prove
+// the new router leaves /health and /api/legacy alone. Set before src/app is loaded.
+process.env.IMAPPS_API_CONFIG = require('node:path').join(__dirname, '..', 'fixtures', 'config.valid.json');
+
 const app = require('../../src/app');
 
 // Cases that need no FTP server: the old routes must answer exactly as before.

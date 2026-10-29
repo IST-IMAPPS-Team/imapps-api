@@ -3,6 +3,11 @@ const cors = require('cors');
 
 const app = express();
 
+// New API (/api/{profile}/...): mounted first so it has its own CORS, body limit and
+// error shape. It passes every other path on, so /health and /api/legacy are unchanged.
+const mountApi = require('./api/mount');
+mountApi(app);
+
 app.use(cors());
 app.use(express.json({ limit: '500mb' }));
 app.use(express.urlencoded({ limit: '500mb', extended: true }));

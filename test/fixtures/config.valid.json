@@ -1,0 +1,12 @@
+{
+  "cors": { "origins": ["http://webapp.test:4200"] },
+  "jwt": { "secret": "test-only-key-test-only-key-0000" },
+  "profiles": {
+    "main": {
+      "server": "db.test",
+      "database": "TestDb",
+      "user": "test_user",
+      "password": "test-only-password"
+    }
+  }
+}
