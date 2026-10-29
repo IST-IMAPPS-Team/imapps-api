@@ -11,16 +11,17 @@ app.get('/health', (req, res) => {
     res.send('API is running');
 });
 
-const uploadFtpRoutes = require('./routes/upload-ftp.routes');
-const downloadFtpRoutes = require('./routes/download-ftp.routes');
-const viewFtpRoutes = require('./routes/view-ftp.routes');
-const copyFtpRoutes = require('./routes/copy-ftp.routes');
-const deleteFtpRoutes = require('./routes/delete-ftp.routes');
+// Old FTP routes: frozen, kept as they were, served under /api/legacy only.
+const uploadFtpRoutes = require('./routes/legacy/upload-ftp.routes');
+const downloadFtpRoutes = require('./routes/legacy/download-ftp.routes');
+const viewFtpRoutes = require('./routes/legacy/view-ftp.routes');
+const copyFtpRoutes = require('./routes/legacy/copy-ftp.routes');
+const deleteFtpRoutes = require('./routes/legacy/delete-ftp.routes');
 
-app.use('/api/uploadftp', uploadFtpRoutes);
-app.use('/api/downloadftp', downloadFtpRoutes);
-app.use('/api/viewftp', viewFtpRoutes);
-app.use('/api/copyftp', copyFtpRoutes);
-app.use('/api/deleteftp', deleteFtpRoutes);
+app.use('/api/legacy/uploadftp', uploadFtpRoutes);
+app.use('/api/legacy/downloadftp', downloadFtpRoutes);
+app.use('/api/legacy/viewftp', viewFtpRoutes);
+app.use('/api/legacy/copyftp', copyFtpRoutes);
+app.use('/api/legacy/deleteftp', deleteFtpRoutes);
 
 module.exports = app;

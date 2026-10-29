@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 
-const uploadFtpController = require('../controllers/upload-ftp.controller');
+const uploadFtpController = require('../../controllers/legacy/upload-ftp.controller');
 
 router.post('/', uploadFtpController.uploadFile);
 
