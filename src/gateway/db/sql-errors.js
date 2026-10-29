@@ -11,7 +11,15 @@ const isMssqlError = (err) => err && (err.name === 'RequestError' || err.name ==
 // SQL user errors (class 11 to 16) keep SQL Server's own message, because the web app shows it.
 // Connection and unexpected errors answer generic text; the detail goes to the log.
 exports.mapSqlError = (err, log = console) => {
-    if (err instanceof ApiError || !isMssqlError(err)) return err;
+    if (err instanceof ApiError) return err;
+
+    // The pool library's own timeout: every connection stayed busy for the whole wait.
+    if (err && err.name === 'TimeoutError') {
+        log.error(`[db] no free connection in time: ${err.message}`);
+        return new ApiError(503, 'db_unavailable', 'All database connections are busy. Try again.');
+    }
+
+    if (!isMssqlError(err)) return err;
 
     if (err.name === 'ConnectionError' || UNAVAILABLE_CODES.has(err.code)) {
         log.error(`[db] database unavailable (${err.code || err.name}): ${err.message}`);

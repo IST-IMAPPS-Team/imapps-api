@@ -14,7 +14,9 @@ exports.createPoolRegistry = ({ profiles, sql, log = console }) => {
             connectionTimeout: 15000,
             // The longest per-call timeout; each call sets its own (single or multi) on top of this.
             requestTimeout: Math.max(p.dataTimeoutSeconds, p.multiTimeoutSeconds) * 1000,
-            pool: { max: p.poolMax, min: 0, idleTimeoutMillis: 30000 },
+            // A call waits up to a minute for a free connection when all poolMax are busy
+            // (the Planning Board sends up to 6 reads at a time, the board load makes about 23).
+            pool: { max: p.poolMax, min: 0, idleTimeoutMillis: 30000, acquireTimeoutMillis: 60000 },
             options: { encrypt: p.encrypt, trustServerCertificate: p.trustServerCertificate, appName: 'imapps-api' }
         };
         if (p.tlsMinVersion) config.options.cryptoCredentialsDetails = { minVersion: p.tlsMinVersion };

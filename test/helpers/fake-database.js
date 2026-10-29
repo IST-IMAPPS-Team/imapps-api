@@ -10,7 +10,7 @@ exports.createFakeDatabase = (handlers = {}) => {
         calls,
         async callProcedure(profile, name, params, options = {}) {
             calls.push({ profile, name, params, options });
-            const handler = handlers[name.toLowerCase()];
+            const handler = handlers[name.toLowerCase().replace(/^[^.]+\./, '')]; // schema.name finds name
             if (!handler) throw new ApiError(404, 'not_found', 'No such procedure.');
             return typeof handler === 'function' ? handler(params, options) : handler;
         },

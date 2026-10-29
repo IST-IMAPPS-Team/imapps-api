@@ -127,6 +127,14 @@ describe('mapping SQL Server errors', () => {
         assert.match(log.errors[0], /Login failed/);
     });
 
+    it('no free connection in time (the pool library\'s TimeoutError) is 503, logged', () => {
+        const log = quietLog();
+        const err = Object.assign(new Error('operation timed out for an unknown reason'), { name: 'TimeoutError' });
+        const e = mapSqlError(err, log);
+        assert.deepEqual([e.status, e.code, e.message], [503, 'db_unavailable', 'All database connections are busy. Try again.']);
+        assert.match(log.errors[0], /no free connection/);
+    });
+
     it('a value the driver can not send is 400 bad_request', () => {
         const e = mapSqlError(new sql.RequestError('Validation failed for parameter', 'EPARAM'), quietLog());
         assert.deepEqual([e.status, e.code], [400, 'bad_request']);

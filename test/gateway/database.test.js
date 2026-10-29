@@ -160,6 +160,7 @@ describe('database: connections', () => {
         assert.equal(main.port, 1444);
         assert.equal(main.database, 'TestDb');
         assert.equal(main.pool.max, 7);
+        assert.equal(main.pool.acquireTimeoutMillis, 60000);
         assert.equal(main.options.encrypt, false);
         assert.equal(main.options.trustServerCertificate, true);
         assert.deepEqual(main.options.cryptoCredentialsDetails, { minVersion: 'TLSv1' });
