@@ -1,11 +1,13 @@
 // One error shape for the new routes: { error: { code, message, step? } }.
+// `extra` goes into the answer body (for example `step`); `headers` go on the response (Retry-After).
 class ApiError extends Error {
-    constructor(status, code, message, extra = {}) {
+    constructor(status, code, message, extra = {}, headers = {}) {
         super(message);
         this.name = 'ApiError';
         this.status = status;
         this.code = code;
         this.extra = extra;
+        this.headers = headers;
     }
 }
 
@@ -23,6 +25,8 @@ const errorHandler = (log) => (err, req, res, next) => {
 
     if (err instanceof ApiError) {
         ({ status, code, message, extra } = err);
+        res.set(err.headers);
+        if (code === 'unauthorized') res.set('WWW-Authenticate', 'Bearer');
     } else if (err.type === 'entity.too.large') {
         status = 413;
         code = 'too_large';

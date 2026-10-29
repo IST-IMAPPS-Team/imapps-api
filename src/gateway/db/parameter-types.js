@@ -14,7 +14,13 @@ const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 const YEAR_RANGES = { datetime: [1753, 9999], smalldatetime: [1900, 2079], date: [1, 9999], datetime2: [1, 9999] };
 
-const bad = (meta, message) => new ApiError(400, 'bad_request', `Parameter @${meta.name}: ${message}`);
+// `reason` is not sent to the caller; it lets the login tell "this value does not fit the
+// parameter" (a wrong login) from other 400s such as a misspelt parameter name.
+const bad = (meta, message) => {
+    const error = new ApiError(400, 'bad_request', `Parameter @${meta.name}: ${message}`);
+    error.reason = 'parameter_value';
+    return error;
+};
 
 // Length of a text or binary parameter, in characters (or bytes). null means "max".
 const declaredLength = (meta) => {

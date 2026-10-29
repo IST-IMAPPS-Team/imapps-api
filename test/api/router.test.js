@@ -6,6 +6,7 @@ const express = require('express');
 const { validate } = require('../../src/gateway/config/load-config');
 const { createApiRouter } = require('../../src/api/router');
 const { ApiError } = require('../../src/api/errors');
+const { issueToken } = require('../../src/gateway/auth/token');
 const mountApi = require('../../src/api/mount');
 
 const config = validate(require('../fixtures/config.valid.json'));
@@ -45,10 +46,12 @@ describe('new API router', () => {
         server.closeAllConnections();
     });
 
-    const get = (p, headers) => fetch(base + p, { headers });
+    // Every route except login needs a token; these tests are about the router, so they send one.
+    const auth = { authorization: `Bearer ${issueToken({ userId: 'tester', secret: config.jwt.secret, lifetimeSeconds: 3600 }).token}` };
+    const get = (p, headers) => fetch(base + p, { headers: { ...auth, ...headers } });
     const post = (p, body, headers = {}) => fetch(base + p, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', ...headers },
+        headers: { 'content-type': 'application/json', ...auth, ...headers },
         body: typeof body === 'string' ? body : JSON.stringify(body)
     });
 

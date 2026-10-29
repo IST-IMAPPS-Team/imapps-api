@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 
 const { ApiError, errorHandler } = require('./errors');
+const { createRequireAuth } = require('../gateway/auth/require-auth');
 const { isReservedProfile } = require('../gateway/guards/profile-names');
 
 // The new API answers /api/{profile}/{area}/... for these areas only.
@@ -10,8 +11,9 @@ const { isReservedProfile } = require('../gateway/guards/profile-names');
 const AREAS = new Set(['auth', 'procedures', 'tables', 'plan', 'health']);
 const JSON_LIMIT = '1mb';
 
-// options.log: { info, error } (default: console). options.mountRoutes(router, config)
-// registers the real routes; they run after the checks below.
+// options.log: { info, error } (default: console). options.database: the database object routes
+// use. options.now: a function returning milliseconds (tests set it). options.mountRoutes(router, ctx)
+// registers the real routes, with ctx = { config, database, log, now }; they run after the checks below.
 exports.createApiRouter = (config, options = {}) => {
     const log = options.log || console;
     const router = express.Router();
@@ -60,9 +62,13 @@ exports.createApiRouter = (config, options = {}) => {
         next();
     });
 
+    // 5. Every route needs a valid token except POST /{profile}/auth/login. This comes before the
+    // body is read, so an unsigned caller can not make the API read a request body.
+    router.use(createRequireAuth({ secret: config.jwt.secret, now: options.now }));
+
     router.use(express.json({ limit: JSON_LIMIT }));
 
-    if (options.mountRoutes) options.mountRoutes(router, config);
+    if (options.mountRoutes) options.mountRoutes(router, { config, database: options.database, log, now: options.now });
 
     router.use((req, res, next) => next(new ApiError(404, 'not_found', 'No such route.')));
     router.use(errorHandler(log));
