@@ -17,7 +17,9 @@ const YEAR_RANGES = { datetime: [1753, 9999], smalldatetime: [1900, 2079], date:
 // `reason` is not sent to the caller; it lets the login tell "this value does not fit the
 // parameter" (a wrong login) from other 400s such as a misspelt parameter name.
 const bad = (meta, message) => {
-    const error = new ApiError(400, 'bad_request', `Parameter @${meta.name}: ${message}`);
+    // `kind: 'column'` marks a table column (step 6); everything else is a procedure parameter.
+    const label = meta.kind === 'column' ? `Column ${meta.name}` : `Parameter @${meta.name}`;
+    const error = new ApiError(400, 'bad_request', `${label}: ${message}`);
     error.reason = 'parameter_value';
     return error;
 };

@@ -1,18 +1,22 @@
 const { ApiError } = require('../../api/errors');
 const { createPoolRegistry } = require('./pool-registry');
 const { createProcedureCatalog } = require('./proc-catalog');
+const { createTableCatalog } = require('./table-catalog');
 const { typeFor, convertValue } = require('./parameter-types');
 const { mapSqlError } = require('./sql-errors');
 
 // THE one place that talks to SQL Server. Everything else asks this object, so tests can
 // swap in a fake with the same methods (see test/helpers/fake-database.js).
 //   callProcedure(profile, procedure, params, { multi }) -> { recordsets, messages, returnValue }
+//   describeTable(profile, table) -> { schema, name, columns, ... } or null
+//   query(profile, sqlText, inputs) -> { recordsets }
 //   ping(profile) -> true
 //   close()
 // `sql` is the mssql module (injected in tests).
 exports.createDatabase = ({ profiles, sql = require('mssql'), log = console, catalogTtlMs } = {}) => {
     const registry = createPoolRegistry({ profiles, sql, log });
     const catalog = createProcedureCatalog({ ttlMs: catalogTtlMs });
+    const tables = createTableCatalog({ ttlMs: catalogTtlMs });
 
     // Checks the caller's parameters against the procedure's own and returns typed inputs.
     const bindParameters = (meta, params) => {
@@ -53,6 +57,31 @@ exports.createDatabase = ({ profiles, sql = require('mssql'), log = console, cat
         }
     };
 
+    // A table's columns from the catalog (cached), or null when there is no such table.
+    const describeTable = async (profileName, tableName) => {
+        try {
+            const pool = await registry.get(profileName);
+            return await tables.describe(pool, sql, profileName, tableName);
+        } catch (err) {
+            throw mapSqlError(err, log);
+        }
+    };
+
+    // Runs SQL text built by the table service. The text holds only catalog identifiers and
+    // @placeholders; every value is an input: { name, meta, value }, typed from its column.
+    const query = async (profileName, text, inputs = [], { timeoutSeconds } = {}) => {
+        try {
+            const pool = await registry.get(profileName);
+            const seconds = timeoutSeconds || profiles[profileName].dataTimeoutSeconds;
+            const request = pool.request({ requestTimeout: seconds * 1000 });
+            for (const input of inputs) request.input(input.name, typeFor(sql, input.meta), input.value);
+            const result = await request.query(text);
+            return { recordsets: result.recordsets || (result.recordset ? [result.recordset] : []) };
+        } catch (err) {
+            throw mapSqlError(err, log);
+        }
+    };
+
     const ping = async (profileName) => {
         try {
             const pool = await registry.get(profileName);
@@ -63,5 +92,5 @@ exports.createDatabase = ({ profiles, sql = require('mssql'), log = console, cat
         }
     };
 
-    return { callProcedure, ping, close: () => registry.closeAll() };
+    return { callProcedure, describeTable, query, ping, close: () => registry.closeAll() };
 };

@@ -22,6 +22,21 @@ const PROCEDURES = {
     prdlock: [['MfgLoc', 'varchar', 20]]
 };
 
+// BOLocking as sp_help showed it, in the shape the catalog query returns.
+const lockingColumn = (name, type, maxLength, nullable) => ({
+    schema_name: 'dbo', table_name: 'BOLocking', object_type: 'U ', has_triggers: 0, column_name: name, type_name: type,
+    max_length: maxLength, precision: 0, scale: 0, is_nullable: nullable, is_identity: 0, is_computed: 0
+});
+const LOCKING_COLUMNS = [
+    lockingColumn('Recid', 'uniqueidentifier', 16, 0),
+    lockingColumn('MfgLoc', 'varchar', 50, 0),
+    lockingColumn('LockedDt', 'datetime', 8, 0),
+    lockingColumn('LockedBy', 'nvarchar', 200, 0),
+    lockingColumn('Session', 'nvarchar', 200, 1),
+    lockingColumn('Remarks', 'nvarchar', 200, 1)
+];
+const STORED_ROW = { Recid: '6F9619FF-8B86-D011-B42D-00C04FC964FF', MfgLoc: 'DYP', LockedDt: new Date(Date.UTC(2026, 9, 23, 9, 30, 0)), LockedBy: 'ray' };
+
 describe('end to end with only SQL Server faked', () => {
     let server;
     let base;
@@ -32,6 +47,14 @@ describe('end to end with only SQL Server faked', () => {
     before(async () => {
         fake = createFakeSql({
             onQuery(text, request) {
+                if (text.includes('sys.columns')) {
+                    const asked = request.inputs.find((i) => i.name === 'name').value.toLowerCase().replace(/^dbo\./, '');
+                    return { recordset: asked === 'bolocking' ? LOCKING_COLUMNS : [] };
+                }
+                if (text.startsWith('SELECT TOP') || text.startsWith('INSERT INTO')) {
+                    return { recordsets: [recordset([STORED_ROW], { Recid: 'uniqueidentifier', LockedDt: 'datetime' })] };
+                }
+                if (text.includes('BEGIN TRANSACTION')) return { recordset: [{ affected: 1, rolledBack: 0 }] };
                 if (!text.includes('sys.parameters')) return { recordset: [{ ok: 1 }] };
                 const name = request.inputs.find((i) => i.name === 'name').value.toLowerCase().replace(/^dbo\./, '');
                 return { recordset: PROCEDURES[name] ? parameterRows(PROCEDURES[name]) : [] };
@@ -138,6 +161,67 @@ describe('end to end with only SQL Server faked', () => {
         const res = await post('/api/main/auth/login', { userid: 'raymart', password: 'x'.repeat(200) }, null);
         assert.equal(res.status, 401);
         assert.equal((await res.json()).error.code, 'invalid_credentials');
+    });
+
+    const lastQuery = (prefix) => fake.state.requests.filter((r) => r.text && r.text.startsWith(prefix)).at(-1);
+
+    it('reads table rows: catalog names in the SQL, values typed from the column, dates and GUIDs as the web app expects', async () => {
+        const res = await fetch(base + '/api/main/tables/BOLocking/rows?where.mfgloc=DYP&top=10', { headers: { authorization: `Bearer ${token}` } });
+        assert.equal(res.status, 200);
+        assert.deepEqual(await res.json(), {
+            rows: [{ Recid: '6f9619ff-8b86-d011-b42d-00c04fc964ff', MfgLoc: 'DYP', LockedDt: '2026-10-23T09:30:00', LockedBy: 'ray' }],
+            truncated: false
+        });
+        const request = lastQuery('SELECT TOP');
+        assert.equal(request.text, 'SELECT TOP (@top) [Recid], [MfgLoc], [LockedDt], [LockedBy], [Session], [Remarks] FROM [dbo].[BOLocking] WHERE [MfgLoc] = @w0');
+        const byName = Object.fromEntries(request.inputs.map((i) => [i.name, i]));
+        assert.equal(byName.top.type, real.Int);
+        assert.equal(byName.top.value, 11);
+        assert.equal(byName.w0.type.type.declaration, 'varchar');
+        assert.equal(byName.w0.type.length, 50);
+    });
+
+    it('inserts a table row with typed values and answers 201 with the stored row', async () => {
+        const res = await post('/api/main/tables/BOLocking/rows', { values: { MfgLoc: 'DYP', LockedBy: 'ray' } });
+        assert.equal(res.status, 201);
+        assert.equal((await res.json()).row.LockedBy, 'ray');
+        const request = lastQuery('INSERT INTO');
+        assert.match(request.text, /^INSERT INTO \[dbo\]\.\[BOLocking\] \(\[MfgLoc\], \[LockedBy\]\) OUTPUT INSERTED\.\[Recid\]/);
+        const lockedBy = request.inputs.find((i) => i.meta === undefined && i.name === 'v1');
+        assert.equal(lockedBy.type.type.declaration, 'nvarchar');
+        assert.equal(lockedBy.type.length, 100);
+    });
+
+    it('changes rows inside a capped transaction with typed filters and the row limit as a parameter', async () => {
+        const patch = await fetch(base + '/api/main/tables/BOLocking/rows?where.MfgLoc=DYP&where.LockedBy=ray', {
+            method: 'PATCH',
+            headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+            body: JSON.stringify({ values: { Remarks: 'back' } })
+        });
+        assert.deepEqual(await patch.json(), { updated: 1 });
+        const request = lastQuery('SET XACT_ABORT ON');
+        assert.match(request.text, /UPDATE \[dbo\]\.\[BOLocking\] SET \[Remarks\] = @v0 WHERE \[MfgLoc\] = @w0 AND \[LockedBy\] = @w1;/);
+        assert.equal(request.inputs.find((i) => i.name === 'maxRows').value, 1000);
+        assert.equal(request.inputs.find((i) => i.name === 'maxRows').type, real.Int);
+
+        const del = await fetch(base + '/api/main/tables/BOLocking/rows?where.MfgLoc=DYP', { method: 'DELETE', headers: { authorization: `Bearer ${token}` } });
+        assert.deepEqual(await del.json(), { deleted: 1 });
+    });
+
+    it('refuses an unknown table (404) and names that are not in the catalog (400) without sending any data SQL', async () => {
+        const dataSql = () => fake.state.requests.filter((r) => r.text && /^(SELECT TOP|INSERT|SET XACT)/.test(r.text)).length;
+        const before = dataSql();
+        const headers = { authorization: `Bearer ${token}` };
+        assert.equal((await fetch(base + '/api/main/tables/Missing/rows', { headers })).status, 404);
+        assert.equal((await fetch(base + '/api/main/tables/BOLocking/rows?columns=Nope', { headers })).status, 400);
+        assert.equal((await fetch(base + '/api/main/tables/BOLocking/rows?where.Nope=1', { headers })).status, 400);
+        assert.equal((await fetch(base + '/api/main/tables/BOLocking/rows?where.LockedDt=2026-10-23T08:00:00Z', { headers })).status, 400);
+        assert.equal(dataSql(), before);
+    });
+
+    it('reads the table\'s catalog entry once for all these calls', () => {
+        const describes = fake.state.requests.filter((r) => r.text && r.text.includes('sys.columns') && r.inputs[0].value.toLowerCase() === 'bolocking');
+        assert.equal(describes.length, 1);
     });
 
     it('never puts the database or user password into a log line', () => {
