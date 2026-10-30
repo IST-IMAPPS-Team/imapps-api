@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const real = require('mssql');
 
 const { createDatabase } = require('../../src/gateway/db/database');
+const { ApiError } = require('../../src/api/errors');
 const { validate } = require('../../src/gateway/config/load-config');
 const { createFakeSql, parameterRows, recordset } = require('../helpers/fake-sql');
 
@@ -143,6 +144,63 @@ describe('database: calling a procedure', () => {
         const { db } = setup();
         await assert.rejects(db.callProcedure('nope', 'prdTest', {}), (e) => e.status === 404 && /Unknown profile/.test(e.message));
         await assert.rejects(db.callProcedure('__proto__', 'prdTest', {}), (e) => e.status === 404);
+    });
+});
+
+describe('database: transactions', () => {
+    const requestError = (number, severity, message) =>
+        new real.RequestError(Object.assign(new Error(message), { info: { number, class: severity } }), 'EREQUEST');
+
+    it('runs the work on one transaction and commits when it returns', async () => {
+        const { db, fake } = setup();
+        const out = await db.transaction('main', async (tx) => {
+            await tx.query('SELECT 1 AS a', []);
+            const second = await tx.query('SELECT @x AS x', [{ name: 'x', meta: { typeName: 'int' }, value: 5 }]);
+            assert.deepEqual(second.recordsets.length, 1);
+            return 'done';
+        });
+        assert.equal(out, 'done');
+
+        const tx = fake.state.transactions[0];
+        assert.deepEqual(tx.events, ['begin', 'commit']);
+        const inTx = fake.state.requests.filter((r) => r.pool === tx);
+        assert.equal(inTx.length, 2, 'every statement ran on the transaction');
+        assert.equal(inTx[1].inputs[0].type, real.Int);
+        assert.equal(inTx[1].overrides.requestTimeout, 30000);
+    });
+
+    it('rolls back when the work throws, and passes an API error on unchanged', async () => {
+        const { db, fake } = setup();
+        const conflict = new ApiError(409, 'conflict', 'held');
+        await assert.rejects(db.transaction('main', async () => { throw conflict; }), (e) => e === conflict);
+        assert.deepEqual(fake.state.transactions[0].events, ['begin', 'rollback']);
+    });
+
+    it('rolls back and maps a SQL Server error (duplicate key is 409)', async () => {
+        const { db, fake } = setup();
+        await assert.rejects(
+            db.transaction('main', async () => { throw requestError(2627, 14, 'Violation of PRIMARY KEY'); }),
+            (e) => e.status === 409 && e.code === 'conflict'
+        );
+        assert.deepEqual(fake.state.transactions[0].events, ['begin', 'rollback']);
+    });
+
+    it('a failing commit is reported; a failing rollback does not hide the first error', async () => {
+        const commitFails = setup();
+        commitFails.fake.script.commitError = requestError(1205, 13, 'deadlock victim');
+        await assert.rejects(commitFails.db.transaction('main', async () => 1), (e) => e.status === 409);
+
+        const rollbackFails = setup();
+        rollbackFails.fake.script.rollbackError = new real.TransactionError('Transaction has not begun.', 'ENOTBEGUN');
+        const original = new ApiError(400, 'bad_request', 'the first error');
+        await assert.rejects(rollbackFails.db.transaction('main', async () => { throw original; }), (e) => e === original);
+    });
+
+    it('answers 503 when the transaction can not begin, and 404 for an unknown profile', async () => {
+        const { db, fake } = setup();
+        fake.script.beginError = new real.ConnectionError('Connection is closed.', 'ECONNCLOSED');
+        await assert.rejects(db.transaction('main', async () => 1), (e) => e.status === 503 && e.code === 'db_unavailable');
+        await assert.rejects(setup().db.transaction('nope', async () => 1), (e) => e.status === 404);
     });
 });
 

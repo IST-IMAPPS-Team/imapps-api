@@ -8,7 +8,7 @@ const real = require('mssql');
 //   script.messages                     -> PRINT lines emitted as 'info' before execute returns
 //   script.connectError                 -> makes pool.connect() reject
 exports.createFakeSql = (script = {}) => {
-    const state = { pools: [], requests: [], connectCalls: 0 };
+    const state = { pools: [], requests: [], transactions: [], connectCalls: 0 };
 
     class FakeRequest extends EventEmitter {
         constructor(pool, overrides) {
@@ -59,7 +59,35 @@ exports.createFakeSql = (script = {}) => {
         }
     }
 
-    return { sql: { ...real, ConnectionPool: FakePool }, state, script };
+    // script.beginError / commitError / rollbackError make that step reject.
+    class FakeTransaction {
+        constructor(pool) {
+            this.pool = pool;
+            this.events = [];
+            state.transactions.push(this);
+        }
+
+        async begin() {
+            this.events.push('begin');
+            if (script.beginError) throw script.beginError;
+        }
+
+        async commit() {
+            this.events.push('commit');
+            if (script.commitError) throw script.commitError;
+        }
+
+        async rollback() {
+            this.events.push('rollback');
+            if (script.rollbackError) throw script.rollbackError;
+        }
+
+        request(overrides) {
+            return new FakeRequest(this, overrides);
+        }
+    }
+
+    return { sql: { ...real, ConnectionPool: FakePool, Transaction: FakeTransaction }, state, script };
 };
 
 // Rows as sys.parameters would return them for proc-catalog.js.

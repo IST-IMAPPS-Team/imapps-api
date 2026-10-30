@@ -11,6 +11,7 @@ const { ApiError } = require('../../src/api/errors');
 exports.createFakeDatabase = (handlers = {}, { tables = {}, onQuery } = {}) => {
     const calls = [];
     const queries = [];
+    const transactions = [];
     return {
         calls,
         queries,
@@ -26,6 +27,26 @@ exports.createFakeDatabase = (handlers = {}, { tables = {}, onQuery } = {}) => {
         async query(profile, text, inputs = [], options = {}) {
             queries.push({ profile, text, inputs, options });
             return onQuery ? onQuery(text, inputs) : { recordsets: [] };
+        },
+        // Runs work(tx) like database.transaction: events records 'commit' or 'rollback'.
+        transactions,
+        async transaction(profile, work) {
+            const events = [];
+            transactions.push(events);
+            const tx = {
+                async query(text, inputs = []) {
+                    queries.push({ profile, text, inputs, inTransaction: true });
+                    return onQuery ? onQuery(text, inputs) : { recordsets: [] };
+                }
+            };
+            try {
+                const outcome = await work(tx);
+                events.push('commit');
+                return outcome;
+            } catch (err) {
+                events.push('rollback');
+                throw err;
+            }
         },
         async ping() {
             return true;

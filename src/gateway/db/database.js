@@ -10,6 +10,7 @@ const { mapSqlError } = require('./sql-errors');
 //   callProcedure(profile, procedure, params, { multi }) -> { recordsets, messages, returnValue }
 //   describeTable(profile, table) -> { schema, name, columns, ... } or null
 //   query(profile, sqlText, inputs) -> { recordsets }
+//   transaction(profile, async (tx) => result)   tx.query(sqlText, inputs); commits, or rolls back if it throws
 //   ping(profile) -> true
 //   close()
 // `sql` is the mssql module (injected in tests).
@@ -82,6 +83,38 @@ exports.createDatabase = ({ profiles, sql = require('mssql'), log = console, cat
         }
     };
 
+    // Runs `work(tx)` in one database transaction on one connection: commit when it returns,
+    // roll back when it throws. tx.query(text, inputs) is like query() above. Keep the work short.
+    const transaction = async (profileName, work) => {
+        let tx;
+        try {
+            const pool = await registry.get(profileName);
+            const timeoutMs = profiles[profileName].dataTimeoutSeconds * 1000;
+            tx = new sql.Transaction(pool);
+            await tx.begin();
+            const runner = {
+                query: async (text, inputs = []) => {
+                    const request = tx.request({ requestTimeout: timeoutMs });
+                    for (const input of inputs) request.input(input.name, typeFor(sql, input.meta), input.value);
+                    const result = await request.query(text);
+                    return { recordsets: result.recordsets || (result.recordset ? [result.recordset] : []) };
+                }
+            };
+            const outcome = await work(runner);
+            await tx.commit();
+            return outcome;
+        } catch (err) {
+            if (tx) {
+                try {
+                    await tx.rollback();
+                } catch {
+                    // the transaction had already ended (the server undid it, or it never began)
+                }
+            }
+            throw mapSqlError(err, log);
+        }
+    };
+
     const ping = async (profileName) => {
         try {
             const pool = await registry.get(profileName);
@@ -92,5 +125,5 @@ exports.createDatabase = ({ profiles, sql = require('mssql'), log = console, cat
         }
     };
 
-    return { callProcedure, describeTable, query, ping, close: () => registry.closeAll() };
+    return { callProcedure, describeTable, query, transaction, ping, close: () => registry.closeAll() };
 };

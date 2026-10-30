@@ -5,7 +5,8 @@ const UNAVAILABLE_CODES = new Set(['ELOGIN', 'ESOCKET', 'ECONNCLOSED', 'ECONNRES
 const DUPLICATE_KEY = new Set([2627, 2601]);
 const PERMISSION_DENIED = new Set([229, 230, 262, 297, 300]);
 
-const isMssqlError = (err) => err && (err.name === 'RequestError' || err.name === 'ConnectionError' || err.name === 'MSSQLError');
+const MSSQL_ERROR_NAMES = new Set(['RequestError', 'ConnectionError', 'TransactionError', 'MSSQLError']);
+const isMssqlError = (err) => Boolean(err) && MSSQL_ERROR_NAMES.has(err.name);
 
 // Maps an error from the SQL Server driver to an ApiError. Anything else comes back unchanged.
 // SQL user errors (class 11 to 16) keep SQL Server's own message, because the web app shows it.

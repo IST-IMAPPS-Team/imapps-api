@@ -2,6 +2,7 @@ const { ApiError } = require('../../api/errors');
 const { checkTableName } = require('../guards/names');
 const { convertValue } = require('./parameter-types');
 const { serialiseRecordsets } = require('./serialise');
+const { quote, qualified } = require('./sql-names');
 
 // Reads and changes rows of one table. The caller sends plain names and values; this module
 //   - looks the table and every column up in the database catalog (unknown names are 400/404),
@@ -25,8 +26,6 @@ const NO_OUTPUT = new Set(['text', 'ntext', 'image', 'timestamp']);
 
 const bad = (message) => new ApiError(400, 'bad_request', message);
 const short = (text) => String(text).slice(0, 64);
-const quote = (name) => `[${String(name).replace(/]/g, ']]')}]`;
-const qualified = (table) => `${quote(table.schema)}.${quote(table.name)}`;
 const intMeta = { typeName: 'int' };
 const isGenerated = (c) => c.identity || c.computed || c.typeName === 'timestamp';
 

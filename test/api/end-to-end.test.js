@@ -35,7 +35,14 @@ const LOCKING_COLUMNS = [
     lockingColumn('Session', 'nvarchar', 200, 1),
     lockingColumn('Remarks', 'nvarchar', 200, 1)
 ];
-const STORED_ROW = { Recid: '6F9619FF-8B86-D011-B42D-00C04FC964FF', MfgLoc: 'DYP', LockedDt: new Date(Date.UTC(2026, 9, 23, 9, 30, 0)), LockedBy: 'ray' };
+const stampColumn = (name, type, maxLength) => ({ ...lockingColumn(name, type, maxLength, 1), table_name: 'BOTimestamp' });
+const TIMESTAMP_COLUMNS = [
+    stampColumn('MfgLoc', 'varchar', 50),
+    stampColumn('Process', 'varchar', 100),
+    stampColumn('UserId', 'varchar', 50),
+    stampColumn('Timestamp', 'datetime', 8)
+];
+const STORED_ROW ={ Recid: '6F9619FF-8B86-D011-B42D-00C04FC964FF', MfgLoc: 'DYP', LockedDt: new Date(Date.UTC(2026, 9, 23, 9, 30, 0)), LockedBy: 'ray' };
 
 describe('end to end with only SQL Server faked', () => {
     let server;
@@ -49,8 +56,10 @@ describe('end to end with only SQL Server faked', () => {
             onQuery(text, request) {
                 if (text.includes('sys.columns')) {
                     const asked = request.inputs.find((i) => i.name === 'name').value.toLowerCase().replace(/^dbo\./, '');
-                    return { recordset: asked === 'bolocking' ? LOCKING_COLUMNS : [] };
+                    return { recordset: { bolocking: LOCKING_COLUMNS, botimestamp: TIMESTAMP_COLUMNS }[asked] || [] };
                 }
+                if (text.includes('sp_getapplock')) return { recordset: [{ result: 0 }] };
+                if (text.includes('isMine')) return { recordset: [] };
                 if (text.startsWith('SELECT TOP') || text.startsWith('INSERT INTO')) {
                     return { recordsets: [recordset([STORED_ROW], { Recid: 'uniqueidentifier', LockedDt: 'datetime' })] };
                 }
@@ -217,6 +226,36 @@ describe('end to end with only SQL Server faked', () => {
         assert.equal((await fetch(base + '/api/main/tables/BOLocking/rows?where.Nope=1', { headers })).status, 400);
         assert.equal((await fetch(base + '/api/main/tables/BOLocking/rows?where.LockedDt=2026-10-23T08:00:00Z', { headers })).status, 400);
         assert.equal(dataSql(), before);
+    });
+
+    it('takes the edit lock in one transaction: its turn first, then look, insert, read back; commits', async () => {
+        const txBefore = fake.state.transactions.length;
+        const res = await post('/api/main/plan/lock', { MfgLoc: 'DYP', LockedBy: 'ray', Session: 'tab-1' });
+        assert.equal(res.status, 201);
+        assert.equal((await res.json()).locked, true);
+
+        const tx = fake.state.transactions[txBefore];
+        assert.deepEqual(tx.events, ['begin', 'commit']);
+        const inTx = fake.state.requests.filter((r) => r.pool === tx);
+        assert.equal(inTx.length, 4);
+        assert.match(inTx[0].text, /sp_getapplock/);
+        assert.equal(inTx[0].inputs[0].value, 'BOLocking:dyp');
+        assert.match(inTx[2].text, /^INSERT INTO \[dbo\]\.\[BOLocking\] \(\[MfgLoc\], \[LockedBy\], \[Session\]\) VALUES \(@mfgLoc, @lockedBy, @session\)$/);
+        const byName = Object.fromEntries(inTx[2].inputs.map((i) => [i.name, i]));
+        assert.equal(byName.mfgLoc.type.type.declaration, 'varchar');
+        assert.equal(byName.mfgLoc.type.length, 50);
+        assert.equal(byName.lockedBy.type.type.declaration, 'nvarchar');
+        assert.equal(byName.lockedBy.type.length, 100);
+    });
+
+    it('writes the load timestamp as the signed-in user, with the database clock', async () => {
+        const res = await post('/api/main/plan/timestamp', { Process: 'Generate Planning Board Finish', MfgLoc: 'DYP' });
+        assert.equal(res.status, 201);
+        const request = lastQuery('INSERT INTO [dbo].[BOTimestamp]');
+        assert.match(request.text, /VALUES \(@mfgLoc, @process, @userId, GETDATE\(\)\)$/);
+        assert.equal(request.inputs.find((i) => i.name === 'userId').value, 'raymart', 'the user the token was issued to');
+        const forged = await post('/api/main/plan/timestamp', { Process: 'x', UserId: 'someone-else' });
+        assert.equal(forged.status, 400);
     });
 
     it('reads the table\'s catalog entry once for all these calls', () => {
