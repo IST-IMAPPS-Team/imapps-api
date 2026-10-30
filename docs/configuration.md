@@ -67,7 +67,7 @@ A user who is deactivated after signing in keeps a working token until it expire
 ### `auth.procedure`
 
 The login procedure: it receives `@userid` and `@password` and returns rows with `UserID`, `Password`, `RememberMe`,
-`IsActive`, `UserName`, `Startup` and `Lang`. It comes only from this file; a caller can never choose it.
+`IsActive`, `UserName`, `Startup` and `Lang`. It comes only from this file; a caller can never choose it. It can not be a system procedure (`sp_...`, `xp_...`); the API refuses to start if it is.
 
 ### `limits`
 
@@ -109,7 +109,7 @@ Reserved for the new FTP routes, which are not built yet. Not used now.
 ## The SQL login
 
 The login in a profile is the **only** access boundary: any procedure or table that login can reach can be reached through
-the API (apart from the one blocked procedure). Give it only what the Planning Board needs, and check that the existing
+the API (apart from `prdGetBOBulkCopyConnectString` and system procedures: names starting with `sp_` or `xp_`, and the `sys` schema). Give it only what the Planning Board needs, and check that the existing
 login has it:
 
 | Needed for | Permission |

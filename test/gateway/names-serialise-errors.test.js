@@ -31,6 +31,32 @@ describe('procedure name check', () => {
     });
 });
 
+describe('system procedures are blocked', () => {
+    it('refuses sp_ and xp_ names in any letter case and with any schema, and the sys and INFORMATION_SCHEMA schemas (403)', () => {
+        const blocked = [
+            'sp_executesql', 'SP_EXECUTESQL', 'sp_who', 'xp_cmdshell', 'XP_CmdShell', 'sp_', 'xp_x',
+            'dbo.sp_who', 'dbo.xp_cmdshell', 'sys.sp_executesql', 'sys.anything', 'SYS.Whatever', 'INFORMATION_SCHEMA.proc', 'information_schema.x'
+        ];
+        for (const name of blocked) {
+            assert.throws(
+                () => checkProcedureName(name),
+                (e) => e instanceof ApiError && e.status === 403 && e.code === 'forbidden' && /System procedures/.test(e.message),
+                name
+            );
+        }
+    });
+
+    it('still allows the Planning Board\'s own procedures and names that only contain sp_ or xp_ somewhere inside', () => {
+        for (const name of ['prdGetBoSP', 'plnUpdBOOutputV4', 'NGP_GetAuthUsers', 'dbo.prdSaveBulkSP', 'spGetData', 'sp1', 'my_sp_proc', 'prdSp_x', 'xpander', 'dbo.xp', 'syslog_proc', 'dbo.sys_report']) {
+            assert.equal(checkProcedureName(name), name);
+        }
+    });
+
+    it('the previous block on prdGetBOBulkCopyConnectString keeps its own message', () => {
+        assert.throws(() => checkProcedureName('prdGetBOBulkCopyConnectString'), (e) => e.status === 403 && /This procedure is not available/.test(e.message));
+    });
+});
+
 describe('serialising database values', () => {
     it('writes datetimes as local text with no zone and no Z', () => {
         const rows = serialiseRecordsets([recordset([{

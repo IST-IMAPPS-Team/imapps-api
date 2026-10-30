@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { isReservedProfile, isValidProfileName } = require('../guards/profile-names');
+const { isBlockedProcedure, isSystemProcedure } = require('../guards/names');
 
 // Problems name the setting and the rule, never the value, so a password or the
 // token key can not end up in a log or a console.
@@ -108,6 +109,7 @@ function validate(raw) {
     rejectUnknown(authRaw, ['procedure'], 'auth', problems);
     const procedure = text(authRaw, 'procedure', 'auth.procedure', problems, { fallback: 'NGP_GetAuthUsers' });
     if (!IDENTIFIER.test(procedure)) problems.push('auth.procedure must be a plain procedure name (letters, digits, underscore)');
+    else if (isBlockedProcedure(procedure) || isSystemProcedure(procedure)) problems.push('auth.procedure can not be a system or blocked procedure (sp_..., xp_...)');
 
     // limits
     const limitsRaw = readObject(raw, 'limits', 'limits', problems);

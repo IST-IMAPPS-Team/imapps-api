@@ -103,6 +103,20 @@ describe('procedure routes', () => {
         assert.equal(database.calls.length, 0);
     });
 
+    it('refuses system procedures (sp_, xp_, sys schema) with 403 on both procedure routes, without calling the database', async () => {
+        database.calls.length = 0;
+        for (const name of ['sp_executesql', 'xp_cmdshell', 'dbo.sp_who', 'sys.sp_helptext']) {
+            for (const suffix of ['', '/multi']) {
+                const res = await post(`/api/main/procedures/${name}${suffix}`, { params: { stmt: 'SELECT 1' } });
+                assert.equal(res.status, 403, name + suffix);
+                const error = await errorOf(res);
+                assert.equal(error.code, 'forbidden');
+                assert.match(error.message, /System procedures/);
+            }
+        }
+        assert.equal(database.calls.length, 0);
+    });
+
     it('refuses a body that is not { params: {...} }: other fields, arrays, params that are not an object', async () => {
         database.calls.length = 0;
         const bad = [

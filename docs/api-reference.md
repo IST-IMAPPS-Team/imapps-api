@@ -92,7 +92,7 @@ Every error from the new routes has one shape:
 | 400 | `sql_error` | SQL Server refused the statement or a procedure raised an error (class 11 to 16). `message` is SQL Server's own text. |
 | 401 | `unauthorized` | No token, a malformed, wrongly signed or tampered token, or an expired one (the message says "expired"). Carries `WWW-Authenticate: Bearer`. |
 | 401 | `invalid_credentials` | Wrong user or password, or the user is not active. Only `POST .../auth/login` answers this. |
-| 403 | `forbidden` | The SQL login has no permission (the message names the object, so the grant can be fixed), or the procedure is blocked (`prdGetBOBulkCopyConnectString`) |
+| 403 | `forbidden` | The SQL login has no permission (the message names the object, so the grant can be fixed), or the procedure is blocked (`prdGetBOBulkCopyConnectString`, or a system procedure: `sp_...`, `xp_...`, the `sys` schema) |
 | 404 | `not_found` | Unknown profile, procedure or table (or one the SQL login can not see); no such route |
 | 409 | `conflict` | A duplicate key or constraint, a deadlock, or the edit lock is held by another user |
 | 413 | `too_large` | The request body is over the limit for that route |
@@ -153,7 +153,15 @@ procedure again without the password.
 ## 4. Stored procedures: `/procedures`
 
 `{name}` is `name` or `schema.name`: letters, digits and underscores only, never a database prefix. Any procedure the SQL
-login can run is allowed, except `prdGetBOBulkCopyConnectString` (`403`).
+login can run is allowed, except these (`403 forbidden`):
+
+- `prdGetBOBulkCopyConnectString` (it hands out database login values), in any schema and any letter case;
+- **system procedures**: any name that starts with `sp_` or `xp_` (for example `sp_executesql`, which runs any SQL text,
+  or `xp_cmdshell`), in any schema and any letter case, and anything in the `sys` or `INFORMATION_SCHEMA` schemas.
+  The Planning Board's own procedures (`prd...`, `pln...`, `NGP_...`) are not affected. A procedure of your own that is
+  named `sp_...` would be blocked too; give it another name.
+
+The same rule applies to a `call` step in a Save.
 
 ### `POST /api/{profile}/procedures/{name}`: one result set
 
@@ -367,8 +375,8 @@ The body may hold only `steps` (a non-empty list).
 1. **Checks the whole recipe before anything runs.** Known step kinds and fields only; within the limits; procedure names
    valid; every procedure found and its parameters checked; every table and column found in the catalog; every value
    converted to its column's type. **A problem in step 5 runs none of steps 1 to 4**, not even the history call.
-   Identity, computed and `rowversion` columns can not be written; a view can not be a bulk target; the blocked
-   procedure is `403`.
+   Identity, computed and `rowversion` columns can not be written; a view can not be a bulk target; a blocked
+   or system procedure is `403`.
 2. **Runs the steps in order and stops at the first one that fails.**
 3. A `call` or `repeat` that is **not** inside a `transaction` runs on its own, with no transaction from the API. The Save
    procedures manage their own transactions and report errors by returning `ERROR_FLAG = 1`; wrapping them in an outer

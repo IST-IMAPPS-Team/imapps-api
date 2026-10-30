@@ -102,6 +102,17 @@ describe('config validation', () => {
         ]);
     });
 
+    it('refuses a login procedure that is a system or blocked procedure', () => {
+        for (const procedure of ['sp_executesql', 'xp_cmdshell', 'prdGetBOBulkCopyConnectString']) {
+            const raw = baseConfig();
+            raw.auth = { procedure };
+            assert.deepEqual(problemsOf(raw), ['auth.procedure can not be a system or blocked procedure (sp_..., xp_...)'], procedure);
+        }
+        const ok = baseConfig();
+        ok.auth = { procedure: 'NGP_GetAuthUsers' };
+        assert.deepEqual(problemsOf(ok), []);
+    });
+
     it('names unknown settings (typos) but ignores keys that start with an underscore', () => {
         const raw = baseConfig();
         raw._readme = 'a note';

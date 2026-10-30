@@ -268,6 +268,8 @@ describe('Save: checking the recipe before anything runs', () => {
     it('call: the name is checked (400), the blocked procedure refused (403), unknown procedures and parameters named by step', async () => {
         await bad(after({ call: 'db.dbo.x' }), 400, 'bad_request', /Step 2: The procedure name is not valid/, { step: '2' });
         await bad(after({ call: 'prdGetBOBulkCopyConnectString' }), 403, 'forbidden', /Step 2: This procedure is not available/, { step: '2' });
+        await bad(after({ call: 'sp_executesql', params: { stmt: 'SELECT 1' } }), 403, 'forbidden', /Step 2: System procedures/, { step: '2' });
+        await bad({ steps: [{ repeat: [{ call: 'xp_cmdshell' }] }] }, 403, 'forbidden', /Step 1\.1: System procedures/, { step: '1.1' });
         await bad(after({ call: 'prdMissing' }), 404, 'not_found', /Step 2: No such procedure/, { step: '2' });
         await bad(after({ call: 'prdSaveBulkSP', params: [] }), 400, 'bad_request', /Step 2: params must be an object/);
         await bad(after({ call: 'prdSaveBulkSP', params: { Nope: 1 } }), 400, 'bad_request', /Step 2: The procedure has no parameter @Nope/, { step: '2' }, {
