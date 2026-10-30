@@ -29,6 +29,13 @@ exports.createFakeSql = (script = {}) => {
             return script.onQuery(text, this);
         }
 
+        // script.onBulk(table, request) may throw; the default stores every row.
+        async bulk(table) {
+            this.bulkTable = table;
+            if (script.onBulk) return script.onBulk(table, this);
+            return { rowsAffected: table.rows.length };
+        }
+
         async execute(name) {
             this.procedure = name;
             for (const message of script.messages || []) this.emit('info', { message });

@@ -66,7 +66,10 @@ exports.createApiRouter = (config, options = {}) => {
     // body is read, so an unsigned caller can not make the API read a request body.
     router.use(createRequireAuth({ secret: config.jwt.secret, now: options.now }));
 
-    router.use(express.json({ limit: JSON_LIMIT }));
+    // Bodies are small (1 MB) except a Save, which carries the rows to store (limits.saveMegabytes).
+    const smallJson = express.json({ limit: JSON_LIMIT });
+    const saveJson = express.json({ limit: `${config.limits.saveMegabytes}mb` });
+    router.use((req, res, next) => (req.method === 'POST' && /^\/[^/]+\/plan\/save\/?$/.test(req.path) ? saveJson : smallJson)(req, res, next));
 
     if (options.mountRoutes) options.mountRoutes(router, { config, database: options.database, log, now: options.now });
 

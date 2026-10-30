@@ -12,7 +12,7 @@ const { quote, qualified } = require('./sql-names');
 
 const MAX_PARTS = 200;
 
-// Types a column can be written as (the types parameter-types.js can convert) ...
+// Types a column can be written as (the types parameter-types.js can convert; exported for Save) ...
 const WRITABLE = new Set(['bit', 'tinyint', 'smallint', 'int', 'bigint', 'decimal', 'numeric', 'money', 'smallmoney',
     'float', 'real', 'char', 'varchar', 'text', 'nchar', 'nvarchar', 'ntext', 'date', 'datetime', 'smalldatetime',
     'datetime2', 'datetimeoffset', 'time', 'uniqueidentifier', 'binary', 'varbinary', 'image', 'xml']);
@@ -238,3 +238,5 @@ exports.deleteRows = async (database, profileName, tableName, query, limits) => 
     const deleted = await runCappedChange(database, profileName, `DELETE FROM ${qualified(table)} ${where.text}`, where.inputs, limits);
     return { deleted };
 };
+
+exports.WRITABLE_TYPES = WRITABLE;

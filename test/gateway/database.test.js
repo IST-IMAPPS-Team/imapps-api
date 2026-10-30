@@ -204,6 +204,91 @@ describe('database: transactions', () => {
     });
 });
 
+describe('database: building blocks for Save', () => {
+    const requestError = (number, severity, message) =>
+        new real.RequestError(Object.assign(new Error(message), { info: { number, class: severity } }), 'EREQUEST');
+    const prepared = {
+        schema: 'dbo',
+        name: 'BOHdrBulkCopy',
+        columns: [
+            { kind: 'column', name: 'TransId', typeName: 'varchar', maxLength: 50, precision: 0, scale: 0, nullable: true },
+            { kind: 'column', name: 'Qty', typeName: 'int', maxLength: 4, precision: 10, scale: 0, nullable: false },
+            { kind: 'column', name: 'When', typeName: 'datetime', maxLength: 8, precision: 23, scale: 3, nullable: true }
+        ],
+        rows: [['T1', 1, new Date(Date.UTC(2026, 9, 23, 8))], ['T1', 2, null]]
+    };
+
+    it('bulkInsert loads the rows into the table with each column typed from the catalog, using the long timeout', async () => {
+        const { db, fake } = setup();
+        assert.deepEqual(await db.bulkInsert('main', prepared), { rows: 2 });
+
+        const request = fake.state.requests.find((r) => r.bulkTable);
+        const table = request.bulkTable;
+        assert.equal(table.path, '[dbo].[BOHdrBulkCopy]');
+        assert.equal(table.create, false);
+        assert.deepEqual(table.columns.map((c) => [c.name, c.type.declaration, c.nullable]), [['TransId', 'varchar', true], ['Qty', 'int', false], ['When', 'datetime', true]]);
+        assert.equal(table.columns[0].length, 50);
+        assert.deepEqual(table.rows.map((r) => r.length), [3, 3]);
+        assert.equal(table.rows[0][2].toISOString(), '2026-10-23T08:00:00.000Z');
+        assert.equal(request.overrides.requestTimeout, 90000);
+    });
+
+    it('bulkInsert inside a transaction runs on that transaction and maps errors', async () => {
+        const { db, fake } = setup({});
+        await db.transaction('main', (tx) => tx.bulkInsert(prepared));
+        assert.equal(fake.state.requests.find((r) => r.bulkTable).pool, fake.state.transactions[0]);
+
+        fake.script.onBulk = () => { throw requestError(2627, 14, 'Violation of PRIMARY KEY'); };
+        await assert.rejects(db.bulkInsert('main', prepared), (e) => e.status === 409 && e.code === 'conflict');
+        await assert.rejects(db.transaction('main', (tx) => tx.bulkInsert(prepared)), (e) => e.status === 409);
+        assert.deepEqual(fake.state.transactions[1].events, ['begin', 'rollback']);
+    });
+
+    it('tx.callProcedure runs on the transaction with typed parameters and what it printed', async () => {
+        const { db, fake } = setup({ messages: ['Saving'] });
+        const result = await db.transaction('main', (tx) => tx.callProcedure('prdTest', { MfgLoc: 'DYP', Count: 2 }, { multi: true }));
+        assert.deepEqual(result.messages, ['Saving']);
+        const request = fake.state.requests.find((r) => r.procedure === 'prdTest');
+        assert.equal(request.pool, fake.state.transactions[0]);
+        assert.equal(request.overrides.requestTimeout, 90000);
+        assert.equal(request.inputs.find((i) => i.name === 'Count').type, real.Int);
+    });
+
+    it('keeps what a procedure printed on the error, also after the error is mapped, and its step', async () => {
+        const failing = () => { throw requestError(50000, 16, 'Batch 12 is locked.'); };
+        const outside = setup({ messages: ['printed before the error'], onExecute: failing });
+        await assert.rejects(outside.db.callProcedure('main', 'prdTest', {}), (e) => e.status === 400 && e.code === 'sql_error' && e.messages[0] === 'printed before the error');
+
+        const inside = setup({ messages: ['printed in tx'], onExecute: failing });
+        await assert.rejects(
+            inside.db.transaction('main', async (tx) => {
+                try { await tx.callProcedure('prdTest', {}); } catch (err) { err.stepId = '2.1'; throw err; }
+            }),
+            (e) => e.status === 400 && e.messages[0] === 'printed in tx' && e.stepId === '2.1'
+        );
+    });
+
+    it('a procedure that ends the transaction it was called in (SQL Server error 266) is 422 step_failed', async () => {
+        for (const number of [266, 3902, 3903]) {
+            const { db } = setup({ onExecute: () => { throw requestError(number, 16, 'Transaction count after EXECUTE indicates a mismatching number of BEGIN and COMMIT statements.'); } });
+            await assert.rejects(
+                db.transaction('main', (tx) => tx.callProcedure('prdTest', {})),
+                (e) => e.status === 422 && e.code === 'step_failed' && /ended the transaction/.test(e.message),
+                String(number)
+            );
+        }
+    });
+
+    it('checkCall finds the procedure and checks the parameters without running anything', async () => {
+        const { db, fake } = setup();
+        assert.equal(await db.checkCall('main', 'prdTest', { MfgLoc: 'DYP', Count: '3' }), true);
+        await assert.rejects(db.checkCall('main', 'prdTest', { Nope: 1 }), (e) => e.status === 400 && /no parameter @Nope/.test(e.message));
+        await assert.rejects(db.checkCall('main', 'prdTest', { MfgLoc: 'x'.repeat(30) }), (e) => e.status === 400 && /longer than the 20/.test(e.message));
+        await assert.rejects(db.checkCall('main', 'prdMissing', {}), (e) => e.status === 404);
+        assert.equal(fake.state.requests.filter((r) => r.procedure).length, 0);
+    });
+});
+
 describe('database: connections', () => {
     it('makes no connection until the first call, then one pool per profile, built from the profile', async () => {
         const { db, fake } = setup();

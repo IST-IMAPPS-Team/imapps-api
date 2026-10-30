@@ -8,11 +8,16 @@ const { mapSqlError } = require('./sql-errors');
 // THE one place that talks to SQL Server. Everything else asks this object, so tests can
 // swap in a fake with the same methods (see test/helpers/fake-database.js).
 //   callProcedure(profile, procedure, params, { multi }) -> { recordsets, messages, returnValue }
+//   checkCall(profile, procedure, params)    throws 404/400 if the call could not be made (nothing runs)
 //   describeTable(profile, table) -> { schema, name, columns, ... } or null
 //   query(profile, sqlText, inputs) -> { recordsets }
-//   transaction(profile, async (tx) => result)   tx.query(sqlText, inputs); commits, or rolls back if it throws
+//   bulkInsert(profile, { schema, name, columns, rows }) -> { rows }
+//   transaction(profile, async (tx) => result)
+//       tx has query(sqlText, inputs), callProcedure(procedure, params, { multi }) and bulkInsert(prepared),
+//       all on one connection; commits when the work returns and rolls back when it throws
 //   ping(profile) -> true
 //   close()
+// `multi: true` only means "use the longer timeout" (the profile's multiTimeoutSeconds).
 // `sql` is the mssql module (injected in tests).
 exports.createDatabase = ({ profiles, sql = require('mssql'), log = console, catalogTtlMs } = {}) => {
     const registry = createPoolRegistry({ profiles, sql, log });
@@ -37,22 +42,62 @@ exports.createDatabase = ({ profiles, sql = require('mssql'), log = console, cat
         return [...inputs.values()];
     };
 
+    const describeProcedure = async (pool, profileName, procedureName) => {
+        const meta = await catalog.describe(pool, sql, profileName, procedureName);
+        if (!meta) throw new ApiError(404, 'not_found', 'No such procedure.');
+        return meta;
+    };
+
+    const timeoutFor = (profileName, long) => {
+        const profile = profiles[profileName];
+        return (long ? profile.multiTimeoutSeconds : profile.dataTimeoutSeconds) * 1000;
+    };
+
+    // Runs a procedure on `parent` (the pool, or a transaction). What the procedure PRINTs is kept,
+    // also when it fails (err.messages), because the procedures that swallow errors print them.
+    const executeProcedure = async (parent, pool, profileName, procedureName, params, long) => {
+        const meta = await describeProcedure(pool, profileName, procedureName);
+        const inputs = bindParameters(meta, params);
+
+        const request = parent.request({ requestTimeout: timeoutFor(profileName, long) });
+        const messages = [];
+        request.on('info', (info) => messages.push(info.message));
+        for (const input of inputs) request.input(input.name, input.type, input.value);
+
+        try {
+            const result = await request.execute(procedureName);
+            return { recordsets: result.recordsets || [], messages, returnValue: result.returnValue };
+        } catch (err) {
+            if (messages.length > 0 && err && typeof err === 'object') err.messages = messages;
+            throw err;
+        }
+    };
+
+    // mapSqlError makes a new error; what the caller attached to the original (what the procedure
+    // printed, and the Save step it belongs to) must survive that.
+    const keepMessages = (original, mapped) => {
+        if (original && mapped && typeof mapped === 'object' && original !== mapped) {
+            if (original.messages) mapped.messages = original.messages;
+            if (original.stepId) mapped.stepId = original.stepId;
+        }
+        return mapped;
+    };
+
     const callProcedure = async (profileName, procedureName, params = {}, { multi = false } = {}) => {
         try {
             const pool = await registry.get(profileName);
-            const meta = await catalog.describe(pool, sql, profileName, procedureName);
-            if (!meta) throw new ApiError(404, 'not_found', 'No such procedure.');
-            const inputs = bindParameters(meta, params);
+            return await executeProcedure(pool, pool, profileName, procedureName, params, multi);
+        } catch (err) {
+            throw keepMessages(err, mapSqlError(err, log));
+        }
+    };
 
-            const profile = profiles[profileName];
-            const seconds = multi ? profile.multiTimeoutSeconds : profile.dataTimeoutSeconds;
-            const request = pool.request({ requestTimeout: seconds * 1000 });
-            const messages = [];
-            request.on('info', (info) => messages.push(info.message));
-            for (const input of inputs) request.input(input.name, input.type, input.value);
-
-            const result = await request.execute(procedureName);
-            return { recordsets: result.recordsets || [], messages, returnValue: result.returnValue };
+    // Finds the procedure and checks the parameters, without running anything.
+    const checkCall = async (profileName, procedureName, params = {}) => {
+        try {
+            const pool = await registry.get(profileName);
+            bindParameters(await describeProcedure(pool, profileName, procedureName), params);
+            return true;
         } catch (err) {
             throw mapSqlError(err, log);
         }
@@ -68,37 +113,57 @@ exports.createDatabase = ({ profiles, sql = require('mssql'), log = console, cat
         }
     };
 
+    const runQuery = async (parent, profileName, text, inputs, seconds) => {
+        const request = parent.request({ requestTimeout: seconds * 1000 });
+        for (const input of inputs) request.input(input.name, typeFor(sql, input.meta), input.value);
+        const result = await request.query(text);
+        return { recordsets: result.recordsets || (result.recordset ? [result.recordset] : []) };
+    };
+
     // Runs SQL text built by the table service. The text holds only catalog identifiers and
     // @placeholders; every value is an input: { name, meta, value }, typed from its column.
     const query = async (profileName, text, inputs = [], { timeoutSeconds } = {}) => {
         try {
             const pool = await registry.get(profileName);
-            const seconds = timeoutSeconds || profiles[profileName].dataTimeoutSeconds;
-            const request = pool.request({ requestTimeout: seconds * 1000 });
-            for (const input of inputs) request.input(input.name, typeFor(sql, input.meta), input.value);
-            const result = await request.query(text);
-            return { recordsets: result.recordsets || (result.recordset ? [result.recordset] : []) };
+            return await runQuery(pool, profileName, text, inputs, timeoutSeconds || profiles[profileName].dataTimeoutSeconds);
+        } catch (err) {
+            throw mapSqlError(err, log);
+        }
+    };
+
+    // prepared: { schema, name, columns: [column meta from the catalog], rows: [[value, ...]] } with every
+    // value already converted to its column's type. A bulk load goes straight into the table.
+    const runBulk = async (parent, profileName, prepared) => {
+        const table = new sql.Table(`${prepared.schema}.${prepared.name}`);
+        table.create = false;
+        for (const column of prepared.columns) table.columns.add(column.name, typeFor(sql, column), { nullable: column.nullable });
+        for (const row of prepared.rows) table.rows.add(...row);
+        await parent.request({ requestTimeout: timeoutFor(profileName, true) }).bulk(table);
+        return { rows: prepared.rows.length };
+    };
+
+    const bulkInsert = async (profileName, prepared) => {
+        try {
+            const pool = await registry.get(profileName);
+            return await runBulk(pool, profileName, prepared);
         } catch (err) {
             throw mapSqlError(err, log);
         }
     };
 
     // Runs `work(tx)` in one database transaction on one connection: commit when it returns,
-    // roll back when it throws. tx.query(text, inputs) is like query() above. Keep the work short.
+    // roll back when it throws. Keep the work short.
     const transaction = async (profileName, work) => {
         let tx;
         try {
             const pool = await registry.get(profileName);
-            const timeoutMs = profiles[profileName].dataTimeoutSeconds * 1000;
             tx = new sql.Transaction(pool);
             await tx.begin();
             const runner = {
-                query: async (text, inputs = []) => {
-                    const request = tx.request({ requestTimeout: timeoutMs });
-                    for (const input of inputs) request.input(input.name, typeFor(sql, input.meta), input.value);
-                    const result = await request.query(text);
-                    return { recordsets: result.recordsets || (result.recordset ? [result.recordset] : []) };
-                }
+                query: (text, inputs = []) => runQuery(tx, profileName, text, inputs, profiles[profileName].dataTimeoutSeconds),
+                callProcedure: (procedureName, params = {}, { multi = false } = {}) =>
+                    executeProcedure(tx, pool, profileName, procedureName, params, multi),
+                bulkInsert: (prepared) => runBulk(tx, profileName, prepared)
             };
             const outcome = await work(runner);
             await tx.commit();
@@ -111,7 +176,7 @@ exports.createDatabase = ({ profiles, sql = require('mssql'), log = console, cat
                     // the transaction had already ended (the server undid it, or it never began)
                 }
             }
-            throw mapSqlError(err, log);
+            throw keepMessages(err, mapSqlError(err, log));
         }
     };
 
@@ -125,5 +190,5 @@ exports.createDatabase = ({ profiles, sql = require('mssql'), log = console, cat
         }
     };
 
-    return { callProcedure, describeTable, query, transaction, ping, close: () => registry.closeAll() };
+    return { callProcedure, checkCall, describeTable, query, bulkInsert, transaction, ping, close: () => registry.closeAll() };
 };

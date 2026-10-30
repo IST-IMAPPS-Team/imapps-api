@@ -39,6 +39,10 @@ exports.mapSqlError = (err, log = console) => {
     if (number === 1205) return new ApiError(409, 'conflict', 'The database rolled the request back (deadlock). Try again.');
     if (number === 1222) return new ApiError(504, 'timeout', 'The database could not get a lock in time.');
     if (number === 2812) return new ApiError(404, 'not_found', 'No such procedure.');
+    // A procedure ended (or left unbalanced) the transaction it was called in, so SQL Server undid it.
+    if (number === 266 || number === 3902 || number === 3903) {
+        return new ApiError(422, 'step_failed', 'A procedure ended the transaction it was called in, so its changes were undone.');
+    }
     if (PERMISSION_DENIED.has(number)) return new ApiError(403, 'forbidden', err.message);
 
     const severity = Number(err.class);
