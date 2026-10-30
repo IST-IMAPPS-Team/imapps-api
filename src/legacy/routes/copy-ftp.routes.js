@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 
-const copyFtpController = require('../../controllers/legacy/copy-ftp.controller');
+const copyFtpController = require('../controllers/copy-ftp.controller');
 
 router.post('/', copyFtpController.copyFolder);
 

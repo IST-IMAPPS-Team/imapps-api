@@ -36,7 +36,8 @@ src/
   api/                         the new router (sign-in check, CORS, error shape) and its route list
   gateway/                     shared: config loading, sign-in and tokens, the database layer, procedure/table/health routes
   plan/                        Planning Board only: edit lock, load timestamp, Save
-  controllers/legacy, routes/legacy, middlewares/legacy   the old FTP code (frozen)
+  legacy/                      the old FTP code (frozen), served at /api/legacy: controllers/, routes/, middlewares/
+                               (to retire it: delete this folder and the five mount lines in app.js)
 test/                          node:test tests with fake database and FTP-free fakes
 docs/                          the documentation above
 config.example.json            the settings template
